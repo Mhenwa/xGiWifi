@@ -6,15 +6,16 @@
 
 <div align="center">
     <h1>xGiWifi</h1>
-<div align="center">
+</div>
 
 
 
 使用Flutter实现的第三方GiWiFi客户端，可以将任何设备包装成某个终端登录，以节省名额，支持Android、Windows、Linux等多个平台
 
-
-
-
+<br>
+<br>
+<br>
+<br>
 
 ## 预览
 
