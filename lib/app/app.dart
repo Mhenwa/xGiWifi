@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app_settings.dart';
@@ -18,6 +19,12 @@ class XGiWifiApp extends StatefulWidget {
 }
 
 class _XGiWifiAppState extends State<XGiWifiApp> {
+  static const List<String> _windowsFontFallback = <String>[
+    'Microsoft YaHei UI',
+    'Microsoft YaHei',
+    'Segoe UI',
+  ];
+
   late AppSettings _settings;
 
   @override
@@ -55,7 +62,12 @@ class _XGiWifiAppState extends State<XGiWifiApp> {
       brightness: brightness,
       colorScheme: colorScheme,
     );
-    final textTheme = baseTheme.textTheme;
+    final textTheme = switch (defaultTargetPlatform) {
+      TargetPlatform.windows => baseTheme.textTheme.apply(
+        fontFamilyFallback: _windowsFontFallback,
+      ),
+      _ => baseTheme.textTheme,
+    };
 
     return baseTheme.copyWith(
       textTheme: textTheme,

@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../giwifi/giwifi_models.dart';
+
 const String kDefaultBaseUrl = 'http://10.100.100.2';
-const String kPlaceholderGithubUrl =
-    'git remote add origin https://github.com/Mhenwa/xGiWifi';
+const String kPlaceholderGithubUrl = 'https://github.com/Mhenwa/xGiWifi';
 
 class AppSettings {
   const AppSettings({
@@ -11,24 +12,28 @@ class AppSettings {
     this.baseUrl = kDefaultBaseUrl,
     this.savedAccount = '',
     this.savedPassword = '',
+    this.savedProfile = DeviceProfile.windows,
   });
 
   final ThemeMode themeMode;
   final String baseUrl;
   final String savedAccount;
   final String savedPassword;
+  final DeviceProfile savedProfile;
 
   AppSettings copyWith({
     ThemeMode? themeMode,
     String? baseUrl,
     String? savedAccount,
     String? savedPassword,
+    DeviceProfile? savedProfile,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
       baseUrl: baseUrl ?? this.baseUrl,
       savedAccount: savedAccount ?? this.savedAccount,
       savedPassword: savedPassword ?? this.savedPassword,
+      savedProfile: savedProfile ?? this.savedProfile,
     );
   }
 }
@@ -38,6 +43,7 @@ class AppSettingsStore {
   static const String _baseUrlKey = 'base_url';
   static const String _savedAccountKey = 'saved_account';
   static const String _savedPasswordKey = 'saved_password';
+  static const String _savedProfileKey = 'saved_profile';
 
   Future<AppSettings> load() async {
     final preferences = await SharedPreferences.getInstance();
@@ -55,6 +61,9 @@ class AppSettingsStore {
       baseUrl: baseUrl,
       savedAccount: preferences.getString(_savedAccountKey) ?? '',
       savedPassword: preferences.getString(_savedPasswordKey) ?? '',
+      savedProfile: _profileFromStorage(
+        preferences.getString(_savedProfileKey),
+      ),
     );
   }
 
@@ -70,6 +79,10 @@ class AppSettingsStore {
     );
     await preferences.setString(_savedAccountKey, settings.savedAccount);
     await preferences.setString(_savedPasswordKey, settings.savedPassword);
+    await preferences.setString(
+      _savedProfileKey,
+      _profileToStorage(settings.savedProfile),
+    );
   }
 
   String _safeNormalize(String value) {
@@ -95,6 +108,13 @@ class AppSettingsStore {
       ThemeMode.system => 'system',
     };
   }
+
+  DeviceProfile _profileFromStorage(String? value) {
+    return DeviceProfile.values.where((profile) => profile.name == value).firstOrNull ??
+        DeviceProfile.windows;
+  }
+
+  String _profileToStorage(DeviceProfile profile) => profile.name;
 }
 
 String normalizePortalBaseUrl(String rawValue) {

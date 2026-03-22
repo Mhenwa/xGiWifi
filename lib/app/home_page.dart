@@ -50,6 +50,7 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _accountController.text = widget.settings.savedAccount;
     _passwordController.text = widget.settings.savedPassword;
+    _selectedProfile = widget.settings.savedProfile;
   }
 
   @override
@@ -709,7 +710,11 @@ class _HomePageState extends State<HomePage> {
     final password = _passwordController.text;
 
     await widget.onSettingsChanged(
-      widget.settings.copyWith(savedAccount: username, savedPassword: password),
+      widget.settings.copyWith(
+        savedAccount: username,
+        savedPassword: password,
+        savedProfile: _selectedProfile,
+      ),
     );
     if (!mounted) {
       return;
