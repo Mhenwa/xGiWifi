@@ -19,13 +19,21 @@
 
 ## 预览
 
-### Android 
 
-<img src="./assets/andriod.jpg" alt="Android" style="zoom:33%;" />
-
-### Windows 
-
-<img src="./assets/windows.png" alt="Windows" style="zoom: 33%;" />
+<div align="center">
+    <table>
+        <tr>
+            <td align="center">
+                <b>Android</b><br><br>
+                <img src="./assets/andriod.jpg" width="216" height="480" />
+            </td>
+            <td align="center">
+                <b>Windows</b><br><br>
+                <img src="./assets/windows.png" width="631" height="352" />
+            </td>
+        </tr>
+    </table>
+</div>
 
 ## 功能
 
