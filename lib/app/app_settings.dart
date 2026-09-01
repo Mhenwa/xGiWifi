@@ -13,6 +13,7 @@ class AppSettings {
     this.savedAccount = '',
     this.savedPassword = '',
     this.savedProfile = DeviceProfile.windows,
+    this.appUuid = '',
   });
 
   final ThemeMode themeMode;
@@ -20,6 +21,7 @@ class AppSettings {
   final String savedAccount;
   final String savedPassword;
   final DeviceProfile savedProfile;
+  final String appUuid;
 
   AppSettings copyWith({
     ThemeMode? themeMode,
@@ -27,6 +29,7 @@ class AppSettings {
     String? savedAccount,
     String? savedPassword,
     DeviceProfile? savedProfile,
+    String? appUuid,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -34,6 +37,7 @@ class AppSettings {
       savedAccount: savedAccount ?? this.savedAccount,
       savedPassword: savedPassword ?? this.savedPassword,
       savedProfile: savedProfile ?? this.savedProfile,
+      appUuid: appUuid ?? this.appUuid,
     );
   }
 }
@@ -44,6 +48,7 @@ class AppSettingsStore {
   static const String _savedAccountKey = 'saved_account';
   static const String _savedPasswordKey = 'saved_password';
   static const String _savedProfileKey = 'saved_profile';
+  static const String _appUuidKey = 'app_uuid';
 
   Future<AppSettings> load() async {
     final preferences = await SharedPreferences.getInstance();
@@ -55,15 +60,25 @@ class AppSettingsStore {
     final baseUrl = storedBaseUrl == null
         ? kDefaultBaseUrl
         : _safeNormalize(storedBaseUrl);
+    final storedProfile = preferences.getString(_savedProfileKey);
+    final savedProfile = _profileFromStorage(storedProfile);
+    if (storedProfile != savedProfile.name) {
+      await preferences.setString(_savedProfileKey, savedProfile.name);
+    }
+
+    var appUuid = preferences.getString(_appUuidKey) ?? '';
+    if (!isGiWifiAppUuid(appUuid)) {
+      appUuid = generateGiWifiAppUuid();
+      await _persistAppUuid(preferences, appUuid);
+    }
 
     return AppSettings(
       themeMode: themeMode,
       baseUrl: baseUrl,
       savedAccount: preferences.getString(_savedAccountKey) ?? '',
       savedPassword: preferences.getString(_savedPasswordKey) ?? '',
-      savedProfile: _profileFromStorage(
-        preferences.getString(_savedProfileKey),
-      ),
+      savedProfile: savedProfile,
+      appUuid: appUuid,
     );
   }
 
@@ -83,6 +98,25 @@ class AppSettingsStore {
       _savedProfileKey,
       _profileToStorage(settings.savedProfile),
     );
+    final storedAppUuid = preferences.getString(_appUuidKey) ?? '';
+    final appUuid = isGiWifiAppUuid(settings.appUuid)
+        ? settings.appUuid
+        : isGiWifiAppUuid(storedAppUuid)
+        ? storedAppUuid
+        : generateGiWifiAppUuid();
+    await _persistAppUuid(preferences, appUuid);
+  }
+
+  Future<void> _persistAppUuid(
+    SharedPreferences preferences,
+    String appUuid,
+  ) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (await preferences.setString(_appUuidKey, appUuid)) {
+        return;
+      }
+    }
+    throw StateError('设备标识 appUuid 持久化失败');
   }
 
   String _safeNormalize(String value) {
@@ -110,8 +144,12 @@ class AppSettingsStore {
   }
 
   DeviceProfile _profileFromStorage(String? value) {
-    return DeviceProfile.values.where((profile) => profile.name == value).firstOrNull ??
-        DeviceProfile.windows;
+    return switch (value) {
+      'android' || 'iphone' => DeviceProfile.android,
+      'apad' || 'ipad' => DeviceProfile.apad,
+      'windows' => DeviceProfile.windows,
+      _ => DeviceProfile.windows,
+    };
   }
 
   String _profileToStorage(DeviceProfile profile) => profile.name;

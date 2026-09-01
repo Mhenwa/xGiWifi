@@ -400,18 +400,16 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 10),
               SegmentedButton<DeviceProfile>(
                 showSelectedIcon: false,
+                expandedInsets: EdgeInsets.zero,
                 segments: DeviceProfile.values
                     .map(
                       (DeviceProfile profile) => ButtonSegment<DeviceProfile>(
                         value: profile,
-                        label: SizedBox(
-                          width: 72,
-                          child: Text(
-                            profile.label,
-                            textAlign: TextAlign.center,
-                            softWrap: false,
-                            overflow: TextOverflow.visible,
-                          ),
+                        label: Text(
+                          profile.label,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     )
@@ -709,13 +707,25 @@ class _HomePageState extends State<HomePage> {
     final username = _accountController.text.trim();
     final password = _passwordController.text;
 
-    await widget.onSettingsChanged(
-      widget.settings.copyWith(
-        savedAccount: username,
-        savedPassword: password,
-        savedProfile: _selectedProfile,
-      ),
-    );
+    try {
+      await widget.onSettingsChanged(
+        widget.settings.copyWith(
+          savedAccount: username,
+          savedPassword: password,
+          savedProfile: _selectedProfile,
+        ),
+      );
+    } on Object catch (error) {
+      _replaceLogs(<String>['[ERROR] 保存登录设置失败: $error']);
+      if (mounted) {
+        setState(() {
+          _connectionState = _ConnectionViewState.failed;
+          _session = null;
+          _statusMessage = '设备标识或登录设置保存失败';
+        });
+      }
+      return;
+    }
     if (!mounted) {
       return;
     }
@@ -735,6 +745,7 @@ class _HomePageState extends State<HomePage> {
       final result = await _client.login(
         baseUrl: widget.settings.baseUrl,
         profile: _selectedProfile,
+        appUuid: widget.settings.appUuid,
         username: username,
         password: password,
         onLog: _appendLog,
@@ -747,6 +758,26 @@ class _HomePageState extends State<HomePage> {
 
       if (!mounted) {
         return;
+      }
+
+      // The APK keeps the canonical Portal origin learned from the captive
+      // redirect.  Persist the same value for the next desktop launch: after
+      // authentication, the fixed probe often returns HTTP 200 and no longer
+      // carries a redirect, while the configured legacy alias may be stale.
+      if (result.outcome == LoginOutcome.success &&
+          _selectedProfile.protocol == DeviceProtocol.appPortal) {
+        final resolvedOrigin = result.session?.resolvedPortalOrigin;
+        if (resolvedOrigin != null &&
+            resolvedOrigin != widget.settings.baseUrl) {
+          try {
+            await widget.onSettingsChanged(
+              widget.settings.copyWith(baseUrl: resolvedOrigin),
+            );
+            _appendLog('[INFO] 已缓存 Portal 地址 $resolvedOrigin');
+          } on Object catch (error) {
+            _appendLog('[WARN] 缓存 Portal 地址失败: $error');
+          }
+        }
       }
 
       setState(() {
