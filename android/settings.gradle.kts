@@ -1,4 +1,17 @@
 pluginManagement {
+    resolutionStrategy {
+        eachPlugin {
+            when (requested.id.id) {
+                "com.android.application" -> {
+                    useModule("com.android.tools.build:gradle:${requested.version}")
+                }
+                "org.jetbrains.kotlin.android" -> {
+                    useModule("org.jetbrains.kotlin:kotlin-gradle-plugin:${requested.version}")
+                }
+            }
+        }
+    }
+
     val flutterSdkPath =
         run {
             val properties = java.util.Properties()
@@ -11,6 +24,8 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
         google()
         mavenCentral()
         gradlePluginPortal()
