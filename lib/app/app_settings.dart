@@ -14,6 +14,7 @@ class AppSettings {
     this.savedPassword = '',
     this.savedProfile = DeviceProfile.windows,
     this.appUuid = '',
+    this.windowsAdapterId = '',
   });
 
   final ThemeMode themeMode;
@@ -22,6 +23,7 @@ class AppSettings {
   final String savedPassword;
   final DeviceProfile savedProfile;
   final String appUuid;
+  final String windowsAdapterId;
 
   AppSettings copyWith({
     ThemeMode? themeMode,
@@ -30,6 +32,7 @@ class AppSettings {
     String? savedPassword,
     DeviceProfile? savedProfile,
     String? appUuid,
+    String? windowsAdapterId,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -38,6 +41,7 @@ class AppSettings {
       savedPassword: savedPassword ?? this.savedPassword,
       savedProfile: savedProfile ?? this.savedProfile,
       appUuid: appUuid ?? this.appUuid,
+      windowsAdapterId: windowsAdapterId ?? this.windowsAdapterId,
     );
   }
 }
@@ -49,6 +53,7 @@ class AppSettingsStore {
   static const String _savedPasswordKey = 'saved_password';
   static const String _savedProfileKey = 'saved_profile';
   static const String _appUuidKey = 'app_uuid';
+  static const String _windowsAdapterIdKey = 'windows_adapter_id';
 
   Future<AppSettings> load() async {
     final preferences = await SharedPreferences.getInstance();
@@ -79,6 +84,8 @@ class AppSettingsStore {
       savedPassword: preferences.getString(_savedPasswordKey) ?? '',
       savedProfile: savedProfile,
       appUuid: appUuid,
+      windowsAdapterId:
+          preferences.getString(_windowsAdapterIdKey)?.trim() ?? '',
     );
   }
 
@@ -97,6 +104,10 @@ class AppSettingsStore {
     await preferences.setString(
       _savedProfileKey,
       _profileToStorage(settings.savedProfile),
+    );
+    await preferences.setString(
+      _windowsAdapterIdKey,
+      settings.windowsAdapterId.trim(),
     );
     final storedAppUuid = preferences.getString(_appUuidKey) ?? '';
     final appUuid = isGiWifiAppUuid(settings.appUuid)

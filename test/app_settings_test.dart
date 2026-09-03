@@ -88,4 +88,24 @@ void main() {
       expect(const AppSettings().appUuid, isEmpty);
     });
   });
+
+  group('Windows adapter selection', () {
+    test('defaults to automatic selection', () {
+      expect(const AppSettings().windowsAdapterId, isEmpty);
+    });
+
+    test('loads and saves the stable adapter ID', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'windows_adapter_id': '{ADAPTER-GUID}',
+      });
+      final store = AppSettingsStore();
+
+      final loaded = await store.load();
+      expect(loaded.windowsAdapterId, '{ADAPTER-GUID}');
+
+      await store.save(loaded.copyWith(windowsAdapterId: ''));
+      final preferences = await SharedPreferences.getInstance();
+      expect(preferences.getString('windows_adapter_id'), isEmpty);
+    });
+  });
 }
