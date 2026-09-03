@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
 import 'app_network_identity.dart';
 
 enum WindowsNetworkAdapterKind { wifi, ethernet, other }
@@ -118,4 +121,32 @@ WindowsNetworkAdapter? findWindowsNetworkAdapter(
     }
   }
   return null;
+}
+
+typedef WindowsNetworkAdapterLoader =
+    Future<List<WindowsNetworkAdapter>> Function();
+
+class WindowsNetworkAdapterService {
+  const WindowsNetworkAdapterService({
+    MethodChannel channel = const MethodChannel(
+      'xgiwifi/windows_network_adapters',
+    ),
+  }) : _channel = channel;
+
+  final MethodChannel _channel;
+
+  Future<List<WindowsNetworkAdapter>> listAdapters() async {
+    if (defaultTargetPlatform != TargetPlatform.windows) {
+      return const <WindowsNetworkAdapter>[];
+    }
+
+    final values =
+        await _channel.invokeListMethod<Object?>('listAdapters') ??
+        const <Object?>[];
+    final adapters = values
+        .whereType<Map<Object?, Object?>>()
+        .map(WindowsNetworkAdapter.fromMap)
+        .toList(growable: false);
+    return sortWindowsNetworkAdapters(adapters);
+  }
 }

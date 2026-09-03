@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xgiwifi/giwifi/windows_network_adapter.dart';
 
@@ -71,4 +74,51 @@ void main() {
       expect(findWindowsNetworkAdapter(adapters, ''), isNull);
     },
   );
+
+  test('loads and sorts maps returned by the Windows channel', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('test/windows_network_adapters');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall call) async {
+          expect(call.method, 'listAdapters');
+          return <Map<String, Object?>>[
+            <String, Object?>{
+              'id': '{VIRTUAL}',
+              'name': 'Hyper-V',
+              'systemName': 'vEthernet',
+              'ipv4': '172.20.0.1',
+              'macAddress': 'AA-BB-CC-DD-EE-03',
+              'gatewayIp': '',
+              'kind': 'other',
+              'isVirtual': true,
+            },
+            <String, Object?>{
+              'id': '{WIFI}',
+              'name': 'Intel Wi-Fi',
+              'systemName': 'Wi-Fi',
+              'ipv4': '10.20.30.40',
+              'macAddress': 'AA-BB-CC-DD-EE-01',
+              'gatewayIp': '10.20.30.1',
+              'kind': 'wifi',
+              'isVirtual': false,
+            },
+          ];
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    final adapters = await const WindowsNetworkAdapterService(
+      channel: channel,
+    ).listAdapters();
+
+    expect(adapters.map((adapter) => adapter.id), <String>[
+      '{WIFI}',
+      '{VIRTUAL}',
+    ]);
+    expect(adapters.first.macAddress, 'AA:BB:CC:DD:EE:01');
+  });
 }

@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "network_adapter_channel.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -28,6 +29,10 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // Exposes active Windows IPv4 adapters to the Dart UI.
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      network_adapter_channel_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
