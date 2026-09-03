@@ -55,10 +55,13 @@ class _HomePageState extends State<HomePage> {
   String _selectedAdapterId = '';
   String _statusMessage = '等待登录';
   bool _isSubmitting = false;
+  bool _isPreparingLogin = false;
   bool _obscurePassword = true;
   bool _isLoadingAdapters = false;
   bool _adapterEnumerationSucceeded = false;
   String _adapterError = '';
+  Future<void> _adapterPersistenceTail = Future<void>.value();
+  int _adapterSelectionGeneration = 0;
 
   @override
   void initState() {
@@ -79,6 +82,8 @@ class _HomePageState extends State<HomePage> {
   bool get _showWindowsAdapterSelector =>
       widget.showWindowsAdapterSelector ??
       (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows);
+
+  bool get _isLoginBusy => _isPreparingLogin || _isSubmitting;
 
   @override
   void dispose() {
@@ -410,7 +415,7 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 24),
               TextFormField(
                 controller: _accountController,
-                enabled: !_isSubmitting,
+                enabled: !_isLoginBusy,
                 textInputAction: TextInputAction.next,
                 decoration: const InputDecoration(
                   labelText: '账号',
@@ -426,13 +431,13 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 16),
               TextFormField(
                 controller: _passwordController,
-                enabled: !_isSubmitting,
+                enabled: !_isLoginBusy,
                 obscureText: _obscurePassword,
                 onFieldSubmitted: (_) => _submitLogin(),
                 decoration: InputDecoration(
                   labelText: '密码',
                   suffixIcon: IconButton(
-                    onPressed: _isSubmitting
+                    onPressed: _isLoginBusy
                         ? null
                         : () {
                             setState(() {
@@ -482,7 +487,7 @@ class _HomePageState extends State<HomePage> {
                     )
                     .toList(),
                 selected: <DeviceProfile>{_selectedProfile},
-                onSelectionChanged: _isSubmitting
+                onSelectionChanged: _isLoginBusy
                     ? null
                     : (Set<DeviceProfile> selection) {
                         setState(() {
@@ -492,17 +497,23 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 24),
               FilledButton.icon(
-                onPressed: _isSubmitting || hasNoWindowsAdapters
+                onPressed: _isLoginBusy || hasNoWindowsAdapters
                     ? null
                     : _submitLogin,
-                icon: _isSubmitting
+                icon: _isLoginBusy
                     ? const SizedBox(
                         width: 18,
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.login_rounded),
-                label: Text(_isSubmitting ? '登录中...' : '登录'),
+                label: Text(
+                  _isPreparingLogin
+                      ? '准备中...'
+                      : _isSubmitting
+                      ? '登录中...'
+                      : '登录',
+                ),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(52),
                 ),
@@ -523,7 +534,7 @@ class _HomePageState extends State<HomePage> {
     final displayedAdapterId = selectedAdapter == null
         ? ''
         : _selectedAdapterId;
-    final controlsDisabled = _isLoadingAdapters || _isSubmitting;
+    final controlsDisabled = _isLoadingAdapters || _isLoginBusy;
     final dropdownKey = ValueKey<String>(
       'windows-adapter:$displayedAdapterId:'
       '${_windowsAdapters.map((adapter) => adapter.id).join('|')}',
@@ -654,8 +665,9 @@ class _HomePageState extends State<HomePage> {
         }
       });
       if (missing && clearMissingSelection) {
-        await widget.onSettingsChanged(
-          widget.settings.copyWith(windowsAdapterId: ''),
+        await _persistWindowsAdapterSelection(
+          adapterId: '',
+          failureMessage: '保存自动选择失败',
         );
       }
       return adapters;
@@ -678,43 +690,63 @@ class _HomePageState extends State<HomePage> {
       _selectedAdapterId = nextId;
       _adapterError = '';
     });
+    await _persistWindowsAdapterSelection(
+      adapterId: nextId,
+      rollbackId: previousId,
+      failureMessage: '保存网络适配器选择失败',
+    );
+  }
+
+  Future<void> _persistWindowsAdapterSelection({
+    required String adapterId,
+    required String failureMessage,
+    String? rollbackId,
+  }) async {
+    final operation = ++_adapterSelectionGeneration;
+    final settings = widget.settings.copyWith(windowsAdapterId: adapterId);
+    final updateSettings = widget.onSettingsChanged;
+    final previousSave = _adapterPersistenceTail;
+    final save = previousSave.then<void>((_) {
+      return updateSettings(settings);
+    });
+    _adapterPersistenceTail = save.then<void>((_) {}, onError: (_) {});
+
     try {
-      await widget.onSettingsChanged(
-        widget.settings.copyWith(windowsAdapterId: nextId),
-      );
+      await save;
     } on Object catch (error) {
-      if (!mounted) {
+      if (!mounted || operation != _adapterSelectionGeneration) {
         return;
       }
       setState(() {
-        _selectedAdapterId = previousId;
-        _adapterError = '保存网络适配器选择失败: $error';
+        if (rollbackId != null && _selectedAdapterId == adapterId) {
+          _selectedAdapterId = rollbackId;
+        }
+        _adapterError = '$failureMessage: $error';
       });
     }
   }
 
   WindowsNetworkAdapter? _adapterForLogin(
     List<WindowsNetworkAdapter>? adapters,
+    String selectedAdapterId,
   ) {
     if (adapters == null) {
+      if (selectedAdapterId.isNotEmpty) {
+        throw const FormatException('无法验证所选网络适配器，请刷新后重试');
+      }
       return null;
     }
     if (adapters.isEmpty) {
       throw const FormatException('未发现可用的 IPv4 网络适配器');
     }
-    if (_selectedAdapterId.isNotEmpty) {
-      final selected = findWindowsNetworkAdapter(adapters, _selectedAdapterId);
+    if (selectedAdapterId.isNotEmpty) {
+      final selected = findWindowsNetworkAdapter(adapters, selectedAdapterId);
       if (selected == null) {
         throw const FormatException('所选网络适配器已不可用，请刷新后重新选择');
       }
       return selected;
     }
-    for (final adapter in adapters) {
-      if (!adapter.isVirtual) {
-        return adapter;
-      }
-    }
-    return adapters.first;
+    return null;
   }
 
   Widget _buildLogsCard() {
@@ -969,7 +1001,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _submitLogin() async {
-    if (_isSubmitting) {
+    if (_isLoginBusy) {
       return;
     }
     if (!_formKey.currentState!.validate()) {
@@ -978,60 +1010,79 @@ class _HomePageState extends State<HomePage> {
 
     final username = _accountController.text.trim();
     final password = _passwordController.text;
+    final selectedProfile = _selectedProfile;
+    final selectedAdapterId = _selectedAdapterId;
+    final baseUrl = widget.settings.baseUrl;
+    final appUuid = widget.settings.appUuid;
     WindowsNetworkAdapter? adapter;
 
-    if (_showWindowsAdapterSelector) {
-      final adapters = await _refreshWindowsAdapters(
-        clearMissingSelection: false,
-      );
+    setState(() {
+      _isPreparingLogin = true;
+    });
+    try {
+      await _adapterPersistenceTail;
       if (!mounted) {
         return;
       }
+      if (_showWindowsAdapterSelector) {
+        final adapters = await _refreshWindowsAdapters(
+          clearMissingSelection: false,
+        );
+        if (!mounted) {
+          return;
+        }
+        try {
+          adapter = _adapterForLogin(adapters, selectedAdapterId);
+        } on FormatException catch (error) {
+          final message = error.message.toString();
+          _replaceLogs(<String>['[ERROR] $message']);
+          setState(() {
+            _connectionState = _ConnectionViewState.failed;
+            _session = null;
+            _statusMessage = message;
+          });
+          return;
+        }
+
+        if (adapter?.kind == WindowsNetworkAdapterKind.ethernet &&
+            selectedProfile != DeviceProfile.windows) {
+          const message = '有线网络只能使用 Windows 终端认证';
+          _replaceLogs(const <String>['[ERROR] $message']);
+          setState(() {
+            _connectionState = _ConnectionViewState.failed;
+            _session = null;
+            _statusMessage = message;
+          });
+          return;
+        }
+      }
+
       try {
-        adapter = _adapterForLogin(adapters);
-      } on FormatException catch (error) {
-        final message = error.message.toString();
-        _replaceLogs(<String>['[ERROR] $message']);
-        setState(() {
-          _connectionState = _ConnectionViewState.failed;
-          _session = null;
-          _statusMessage = message;
-        });
+        await widget.onSettingsChanged(
+          widget.settings.copyWith(
+            savedAccount: username,
+            savedPassword: password,
+            savedProfile: selectedProfile,
+            windowsAdapterId: selectedAdapterId,
+          ),
+        );
+      } on Object catch (error) {
+        if (mounted) {
+          _replaceLogs(<String>['[ERROR] 保存登录设置失败: $error']);
+          setState(() {
+            _connectionState = _ConnectionViewState.failed;
+            _session = null;
+            _statusMessage = '设备标识或登录设置保存失败';
+          });
+        }
         return;
       }
-
-      if (adapter?.kind == WindowsNetworkAdapterKind.ethernet &&
-          _selectedProfile != DeviceProfile.windows) {
-        const message = '有线网络只能使用 Windows 终端认证';
-        _replaceLogs(const <String>['[ERROR] $message']);
-        setState(() {
-          _connectionState = _ConnectionViewState.failed;
-          _session = null;
-          _statusMessage = message;
-        });
-        return;
-      }
-    }
-
-    try {
-      await widget.onSettingsChanged(
-        widget.settings.copyWith(
-          savedAccount: username,
-          savedPassword: password,
-          savedProfile: _selectedProfile,
-          windowsAdapterId: _selectedAdapterId,
-        ),
-      );
-    } on Object catch (error) {
-      _replaceLogs(<String>['[ERROR] 保存登录设置失败: $error']);
+    } finally {
       if (mounted) {
         setState(() {
-          _connectionState = _ConnectionViewState.failed;
-          _session = null;
-          _statusMessage = '设备标识或登录设置保存失败';
+          _isPreparingLogin = false;
         });
       }
-      return;
     }
     if (!mounted) {
       return;
@@ -1042,7 +1093,7 @@ class _HomePageState extends State<HomePage> {
       _isSubmitting = true;
       _connectionState = _ConnectionViewState.connecting;
       _session = null;
-      _statusMessage = '正在连接 ${widget.settings.baseUrl}';
+      _statusMessage = '正在连接 $baseUrl';
     });
     if (adapter != null) {
       _appendLog('[INFO] 使用网络适配器: ${adapter.name}，IPv4=${adapter.ipv4}');
@@ -1053,9 +1104,9 @@ class _HomePageState extends State<HomePage> {
 
     try {
       final result = await _client.login(
-        baseUrl: widget.settings.baseUrl,
-        profile: _selectedProfile,
-        appUuid: widget.settings.appUuid,
+        baseUrl: baseUrl,
+        profile: selectedProfile,
+        appUuid: appUuid,
         username: username,
         password: password,
         networkIdentity: adapter?.identity,
@@ -1076,10 +1127,9 @@ class _HomePageState extends State<HomePage> {
       // authentication, the fixed probe often returns HTTP 200 and no longer
       // carries a redirect, while the configured legacy alias may be stale.
       if (result.outcome == LoginOutcome.success &&
-          _selectedProfile.protocol == DeviceProtocol.appPortal) {
+          selectedProfile.protocol == DeviceProtocol.appPortal) {
         final resolvedOrigin = result.session?.resolvedPortalOrigin;
-        if (resolvedOrigin != null &&
-            resolvedOrigin != widget.settings.baseUrl) {
+        if (resolvedOrigin != null && resolvedOrigin != baseUrl) {
           try {
             await widget.onSettingsChanged(
               widget.settings.copyWith(baseUrl: resolvedOrigin),

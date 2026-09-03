@@ -125,6 +125,10 @@ flutter::EncodableList ListAdapters() {
     std::string ipv4;
     for (auto* address = adapter->FirstUnicastAddress; address != nullptr;
          address = address->Next) {
+      if (address->DadState != IpDadStatePreferred ||
+          address->ValidLifetime == 0) {
+        continue;
+      }
       ipv4 = Ipv4FromSockaddr(address->Address.lpSockaddr);
       if (!ipv4.empty()) {
         break;
