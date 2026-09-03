@@ -8,9 +8,11 @@ import 'package:pointycastle/export.dart';
 
 import 'app_network_identity.dart';
 import 'giwifi_models.dart';
+import 'source_bound_http_client.dart';
 
 typedef LoginLogSink = void Function(String entry);
 typedef BindConflictHandler = Future<bool> Function(String message);
+typedef NetworkBoundClientFactory = http.Client Function(String sourceIpv4);
 
 const List<String> kPortalFieldOrder = <String>[
   'sign',
@@ -83,12 +85,15 @@ int _systemEpochSeconds() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
 class GiWifiClient {
   GiWifiClient({
     http.Client Function()? clientFactory,
+    NetworkBoundClientFactory? networkBoundClientFactory,
     int Function()? epochSeconds,
     Future<void> Function(Duration duration)? delay,
     AppNetworkIdentityResolver? appNetworkIdentityResolver,
     String appPortalProbeUrl = _defaultAppPortalProbeUrl,
     AppAccountLoginOptions appAccountOptions = const AppAccountLoginOptions(),
   }) : _clientFactory = clientFactory ?? http.Client.new,
+       _networkBoundClientFactory =
+           networkBoundClientFactory ?? createSourceBoundHttpClient,
        _epochSeconds = epochSeconds ?? _systemEpochSeconds,
        _delay =
            delay ?? ((Duration duration) => Future<void>.delayed(duration)),
@@ -99,6 +104,7 @@ class GiWifiClient {
        _runtimeAppUuid = generateGiWifiAppUuid();
 
   final http.Client Function() _clientFactory;
+  final NetworkBoundClientFactory _networkBoundClientFactory;
   final int Function() _epochSeconds;
   final Future<void> Function(Duration duration) _delay;
   final AppNetworkIdentityResolver _appNetworkIdentityResolver;
@@ -121,6 +127,7 @@ class GiWifiClient {
     required BindConflictHandler onBindConflict,
     String appUuid = '',
     AppAccountLoginOptions? appAccountOptions,
+    AppNetworkIdentity? networkIdentity,
     LoginLogSink? onLog,
   }) async {
     if (profile.protocol == DeviceProtocol.appPortal) {
@@ -131,6 +138,7 @@ class GiWifiClient {
         password: password,
         appUuid: appUuid.trim().isEmpty ? _runtimeAppUuid : appUuid.trim(),
         appAccountOptions: appAccountOptions ?? _appAccountOptions,
+        networkIdentity: networkIdentity,
         onBindConflict: onBindConflict,
         onLog: onLog,
       );
@@ -141,6 +149,7 @@ class GiWifiClient {
       profile: profile,
       username: username,
       password: password,
+      networkIdentity: networkIdentity,
       onBindConflict: onBindConflict,
       onLog: onLog,
     );
@@ -151,10 +160,11 @@ class GiWifiClient {
     required DeviceProfile profile,
     required String username,
     required String password,
+    AppNetworkIdentity? networkIdentity,
     required BindConflictHandler onBindConflict,
     LoginLogSink? onLog,
   }) async {
-    final client = _clientFactory();
+    final client = _createClient(networkIdentity);
     final baseUri = Uri.parse(baseUrl);
 
     void logInfo(String message) => onLog?.call('[INFO] $message');
@@ -295,10 +305,11 @@ class GiWifiClient {
     required String password,
     required String appUuid,
     required AppAccountLoginOptions appAccountOptions,
+    AppNetworkIdentity? networkIdentity,
     required BindConflictHandler onBindConflict,
     LoginLogSink? onLog,
   }) async {
-    final client = _clientFactory();
+    final client = _createClient(networkIdentity);
     final baseUri = Uri.parse(baseUrl);
 
     void logInfo(String message) => onLog?.call('[INFO] $message');
@@ -310,6 +321,7 @@ class GiWifiClient {
         client: client,
         baseUri: baseUri,
         profile: profile,
+        networkIdentity: networkIdentity,
       );
 
       logInfo('终端: ${profile.label}');
@@ -458,6 +470,7 @@ class GiWifiClient {
             client: client,
             baseUri: baseUri,
             profile: profile,
+            networkIdentity: networkIdentity,
             fallbackPortalUri: context.portalUri,
           );
           context = refreshedContext.copyWith(
@@ -719,6 +732,7 @@ class GiWifiClient {
     required http.Client client,
     required Uri baseUri,
     required DeviceProfile profile,
+    AppNetworkIdentity? networkIdentity,
     Uri? fallbackPortalUri,
   }) async {
     final discoveredPortalUri = await _discoverAppPortalUri(client);
@@ -740,7 +754,8 @@ class GiWifiClient {
           _lastAppPortalUri ??
           configuredPortalUri,
     );
-    final identity = await _appNetworkIdentityResolver(portalUri);
+    final identity =
+        networkIdentity ?? await _appNetworkIdentityResolver(portalUri);
 
     if (!isUsableIpv4Address(identity.userIp)) {
       throw const FormatException('未获取当前网络接口 IPv4，已停止 App Portal 认证');
@@ -759,6 +774,18 @@ class GiWifiClient {
           ? identity.gatewayIp
           : '',
     );
+  }
+
+  http.Client _createClient(AppNetworkIdentity? networkIdentity) {
+    if (networkIdentity == null) {
+      return _clientFactory();
+    }
+
+    final sourceIpv4 = networkIdentity.userIp.trim();
+    if (!isUsableIpv4Address(sourceIpv4)) {
+      throw const FormatException('所选网卡没有有效 IPv4 地址');
+    }
+    return _networkBoundClientFactory(sourceIpv4);
   }
 
   Future<Uri?> _discoverAppPortalUri(http.Client client) async {

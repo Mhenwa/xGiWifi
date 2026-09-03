@@ -6,6 +6,7 @@ import 'package:http/testing.dart';
 import 'package:xgiwifi/giwifi/app_network_identity.dart';
 import 'package:xgiwifi/giwifi/giwifi_client.dart';
 import 'package:xgiwifi/giwifi/giwifi_models.dart';
+import 'package:xgiwifi/giwifi/windows_network_adapter.dart';
 
 void main() {
   group('App Portal login', () {
@@ -1293,6 +1294,116 @@ void main() {
         );
       },
     );
+    test(
+      'uses selected adapter identity without automatic resolution',
+      () async {
+        String? boundSource;
+        var resolverCalled = false;
+        final decodedRequests = <Map<String, String>>[];
+        final client = MockClient((http.Request request) async {
+          final fields = _decodeAppRequest(request);
+          decodedRequests.add(fields);
+          if (request.url.path == '/gportal/app/queryAuthState') {
+            return _jsonResponse(
+              _appResponse(<String, dynamic>{
+                'resultCode': 0,
+                'resultMsg': 'state ok',
+                'data': <String, dynamic>{
+                  'authState': 1,
+                  'userMac': _selectedWindowsAdapter.macAddress,
+                  'nasName': 'NAS-FROM-STATE',
+                },
+              }),
+            );
+          }
+          expect(request.url.path, '/gportal/app/authLogin');
+          return _jsonResponse(
+            _appResponse(<String, dynamic>{
+              'resultCode': 0,
+              'resultMsg': '登录成功',
+              'data': <String, dynamic>{'tips': '登录成功'},
+            }),
+          );
+        });
+        final giWifi = GiWifiClient(
+          clientFactory: () => throw StateError('unbound client used'),
+          networkBoundClientFactory: (String sourceIpv4) {
+            boundSource = sourceIpv4;
+            return client;
+          },
+          epochSeconds: () => 1760000000,
+          appPortalProbeUrl: '',
+          appNetworkIdentityResolver: (_) async {
+            resolverCalled = true;
+            return _fixtureIdentity;
+          },
+          appAccountOptions: const AppAccountLoginOptions(enabled: false),
+        );
+
+        final result = await giWifi.login(
+          baseUrl: 'http://10.100.100.2',
+          profile: DeviceProfile.android,
+          username: 'fixture-user',
+          password: 'fixture-password',
+          appUuid: '12345678-1234-1234-123456789abc',
+          networkIdentity: _selectedWindowsAdapter.identity,
+          onBindConflict: (_) async => false,
+        );
+
+        expect(resolverCalled, isFalse);
+        expect(boundSource, '10.20.30.40');
+        expect(result.session?.ip, '10.20.30.40');
+        expect(decodedRequests, hasLength(2));
+        expect(
+          decodedRequests.every(
+            (Map<String, String> fields) => fields['userIp'] == '10.20.30.40',
+          ),
+          isTrue,
+        );
+        expect(decodedRequests.last['userMac'], 'AA:BB:CC:DD:EE:01');
+      },
+    );
+  });
+
+  test('Windows login uses the selected adapter source address', () async {
+    String? boundSource;
+    final client = MockClient((http.Request request) async {
+      if (request.method == 'GET') {
+        return http.Response(
+          _windowsLoginHtml,
+          200,
+          headers: <String, String>{
+            'set-cookie': 'PHPSESSID=bound-session; Path=/',
+          },
+        );
+      }
+      return _jsonResponse(
+        jsonEncode(<String, dynamic>{
+          'status': 1,
+          'info': '登录成功',
+          'data': 'logout.html',
+        }),
+      );
+    });
+    final giWifi = GiWifiClient(
+      clientFactory: () => throw StateError('unbound client used'),
+      networkBoundClientFactory: (String sourceIpv4) {
+        boundSource = sourceIpv4;
+        return client;
+      },
+    );
+
+    final result = await giWifi.login(
+      baseUrl: 'http://10.100.100.2',
+      profile: DeviceProfile.windows,
+      username: 'fixture-user',
+      password: 'fixture-password',
+      networkIdentity: _selectedWindowsAdapter.identity,
+      onBindConflict: (_) async => false,
+    );
+
+    expect(result.outcome, LoginOutcome.success);
+    expect(boundSource, '10.20.30.40');
   });
 
   test('Windows keeps the existing Web loginAction request contract', () async {
@@ -1428,6 +1539,17 @@ const AppNetworkIdentity _fixtureIdentity = AppNetworkIdentity(
   userIp: '10.0.0.42',
   userMac: 'AA:BB:CC:DD:EE:FF',
   interfaceName: 'wlan0',
+);
+
+const WindowsNetworkAdapter _selectedWindowsAdapter = WindowsNetworkAdapter(
+  id: '{WIFI}',
+  name: 'Intel Wi-Fi',
+  systemName: 'Wi-Fi',
+  ipv4: '10.20.30.40',
+  macAddress: 'AA:BB:CC:DD:EE:01',
+  gatewayIp: '10.20.30.1',
+  kind: WindowsNetworkAdapterKind.wifi,
+  isVirtual: false,
 );
 
 Map<String, String> _decodeAppRequest(http.Request request) {
