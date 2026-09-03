@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../giwifi/giwifi_client.dart';
 import '../giwifi/giwifi_models.dart';
+import '../giwifi/windows_network_adapter.dart';
 import 'app_settings.dart';
 
 enum _ConnectionViewState { disconnected, connecting, connected, failed }
@@ -21,10 +23,16 @@ class HomePage extends StatefulWidget {
     super.key,
     required this.settings,
     required this.onSettingsChanged,
+    this.windowsAdapterLoader,
+    this.showWindowsAdapterSelector,
+    this.client,
   });
 
   final AppSettings settings;
   final Future<void> Function(AppSettings) onSettingsChanged;
+  final WindowsNetworkAdapterLoader? windowsAdapterLoader;
+  final bool? showWindowsAdapterSelector;
+  final GiWifiClient? client;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -35,23 +43,42 @@ class _HomePageState extends State<HomePage> {
   final _accountController = TextEditingController();
   final _passwordController = TextEditingController();
   final _progressLogs = ValueNotifier<List<String>>(<String>[]);
-  final _client = GiWifiClient();
+  late final GiWifiClient _client;
+  late final WindowsNetworkAdapterLoader _windowsAdapterLoader;
 
   DeviceProfile _selectedProfile = DeviceProfile.windows;
   _ConnectionViewState _connectionState = _ConnectionViewState.disconnected;
   LoginSession? _session;
   List<String> _logs = <String>[];
+  List<WindowsNetworkAdapter> _windowsAdapters =
+      const <WindowsNetworkAdapter>[];
+  String _selectedAdapterId = '';
   String _statusMessage = '等待登录';
   bool _isSubmitting = false;
   bool _obscurePassword = true;
+  bool _isLoadingAdapters = false;
+  bool _adapterEnumerationSucceeded = false;
+  String _adapterError = '';
 
   @override
   void initState() {
     super.initState();
+    _client = widget.client ?? GiWifiClient();
+    _windowsAdapterLoader =
+        widget.windowsAdapterLoader ??
+        const WindowsNetworkAdapterService().listAdapters;
+    _selectedAdapterId = widget.settings.windowsAdapterId;
     _accountController.text = widget.settings.savedAccount;
     _passwordController.text = widget.settings.savedPassword;
     _selectedProfile = widget.settings.savedProfile;
+    if (_showWindowsAdapterSelector) {
+      unawaited(_refreshWindowsAdapters(clearMissingSelection: true));
+    }
   }
+
+  bool get _showWindowsAdapterSelector =>
+      widget.showWindowsAdapterSelector ??
+      (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows);
 
   @override
   void dispose() {
@@ -164,7 +191,7 @@ class _HomePageState extends State<HomePage> {
         ),
       _FlowCardItem(
         id: 'login-card',
-        estimatedHeight: 430,
+        estimatedHeight: _showWindowsAdapterSelector ? 720 : 560,
         child: _buildLoginCard(),
       ),
       _FlowCardItem(
@@ -323,6 +350,10 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildLoginCard() {
     final theme = Theme.of(context);
+    final hasNoWindowsAdapters =
+        _showWindowsAdapterSelector &&
+        _adapterEnumerationSucceeded &&
+        _windowsAdapters.isEmpty;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -342,6 +373,38 @@ class _HomePageState extends State<HomePage> {
                 '使用校园网账号登录，可选择终端类型占用在线设备名额。',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withValues(
+                    alpha: 0.55,
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Icon(
+                      Icons.info_outline,
+                      size: 20,
+                      color: theme.colorScheme.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '有线网络仅支持 Windows（电脑端）认证；'
+                        'Wi-Fi 可选择 Android、APad 或 Windows 终端认证。',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onPrimaryContainer,
+                          height: 1.45,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 24),
@@ -390,6 +453,10 @@ class _HomePageState extends State<HomePage> {
                   return null;
                 },
               ),
+              if (_showWindowsAdapterSelector) ...<Widget>[
+                const SizedBox(height: 20),
+                _buildWindowsAdapterSelector(),
+              ],
               const SizedBox(height: 20),
               Text(
                 '终端',
@@ -425,7 +492,9 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 24),
               FilledButton.icon(
-                onPressed: _isSubmitting ? null : _submitLogin,
+                onPressed: _isSubmitting || hasNoWindowsAdapters
+                    ? null
+                    : _submitLogin,
                 icon: _isSubmitting
                     ? const SizedBox(
                         width: 18,
@@ -443,6 +512,209 @@ class _HomePageState extends State<HomePage> {
         ),
       ),
     );
+  }
+
+  Widget _buildWindowsAdapterSelector() {
+    final theme = Theme.of(context);
+    final selectedAdapter = findWindowsNetworkAdapter(
+      _windowsAdapters,
+      _selectedAdapterId,
+    );
+    final displayedAdapterId = selectedAdapter == null
+        ? ''
+        : _selectedAdapterId;
+    final controlsDisabled = _isLoadingAdapters || _isSubmitting;
+    final dropdownKey = ValueKey<String>(
+      'windows-adapter:$displayedAdapterId:'
+      '${_windowsAdapters.map((adapter) => adapter.id).join('|')}',
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                key: dropdownKey,
+                initialValue: displayedAdapterId,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: '网络适配器',
+                  prefixIcon: Icon(Icons.lan_outlined),
+                ),
+                items: <DropdownMenuItem<String>>[
+                  const DropdownMenuItem<String>(
+                    value: '',
+                    child: Text('自动选择'),
+                  ),
+                  ..._windowsAdapters.map(
+                    (WindowsNetworkAdapter adapter) => DropdownMenuItem<String>(
+                      value: adapter.id,
+                      child: Text(
+                        _adapterLabel(adapter),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: controlsDisabled
+                    ? null
+                    : (String? id) {
+                        unawaited(_selectWindowsAdapter(id));
+                      },
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton.outlined(
+              tooltip: '刷新网络适配器',
+              onPressed: controlsDisabled
+                  ? null
+                  : () {
+                      unawaited(
+                        _refreshWindowsAdapters(clearMissingSelection: true),
+                      );
+                    },
+              style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
+              icon: _isLoadingAdapters
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+            ),
+          ],
+        ),
+        if (_adapterError.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 8),
+          Text(
+            _adapterError,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.error,
+            ),
+          ),
+        ] else if (_adapterEnumerationSucceeded &&
+            _windowsAdapters.isEmpty) ...<Widget>[
+          const SizedBox(height: 8),
+          Text(
+            '未发现可用的 IPv4 网络适配器',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.error,
+            ),
+          ),
+        ] else ...<Widget>[
+          const SizedBox(height: 8),
+          Text(
+            '自动选择会优先使用实体网卡，虚拟网卡仍可手动选择。',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  String _adapterLabel(WindowsNetworkAdapter adapter) =>
+      '${adapter.name} · ${adapter.typeLabel}'
+      '${adapter.isVirtual ? "（虚拟）" : ""} · ${adapter.ipv4}';
+
+  Future<List<WindowsNetworkAdapter>?> _refreshWindowsAdapters({
+    required bool clearMissingSelection,
+  }) async {
+    if (!_showWindowsAdapterSelector) {
+      return const <WindowsNetworkAdapter>[];
+    }
+    if (mounted) {
+      setState(() {
+        _isLoadingAdapters = true;
+        _adapterError = '';
+      });
+    }
+
+    try {
+      final adapters = sortWindowsNetworkAdapters(
+        await _windowsAdapterLoader(),
+      );
+      final missing =
+          _selectedAdapterId.isNotEmpty &&
+          findWindowsNetworkAdapter(adapters, _selectedAdapterId) == null;
+      if (!mounted) {
+        return adapters;
+      }
+      setState(() {
+        _windowsAdapters = adapters;
+        _adapterEnumerationSucceeded = true;
+        _isLoadingAdapters = false;
+        if (missing && clearMissingSelection) {
+          _selectedAdapterId = '';
+          _adapterError = '上次选择的网卡不可用，已切换为自动选择';
+        }
+      });
+      if (missing && clearMissingSelection) {
+        await widget.onSettingsChanged(
+          widget.settings.copyWith(windowsAdapterId: ''),
+        );
+      }
+      return adapters;
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() {
+          _isLoadingAdapters = false;
+          _adapterEnumerationSucceeded = false;
+          _adapterError = '读取网络适配器失败: $error';
+        });
+      }
+      return null;
+    }
+  }
+
+  Future<void> _selectWindowsAdapter(String? id) async {
+    final nextId = id ?? '';
+    final previousId = _selectedAdapterId;
+    setState(() {
+      _selectedAdapterId = nextId;
+      _adapterError = '';
+    });
+    try {
+      await widget.onSettingsChanged(
+        widget.settings.copyWith(windowsAdapterId: nextId),
+      );
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedAdapterId = previousId;
+        _adapterError = '保存网络适配器选择失败: $error';
+      });
+    }
+  }
+
+  WindowsNetworkAdapter? _adapterForLogin(
+    List<WindowsNetworkAdapter>? adapters,
+  ) {
+    if (adapters == null) {
+      return null;
+    }
+    if (adapters.isEmpty) {
+      throw const FormatException('未发现可用的 IPv4 网络适配器');
+    }
+    if (_selectedAdapterId.isNotEmpty) {
+      final selected = findWindowsNetworkAdapter(adapters, _selectedAdapterId);
+      if (selected == null) {
+        throw const FormatException('所选网络适配器已不可用，请刷新后重新选择');
+      }
+      return selected;
+    }
+    for (final adapter in adapters) {
+      if (!adapter.isVirtual) {
+        return adapter;
+      }
+    }
+    return adapters.first;
   }
 
   Widget _buildLogsCard() {
@@ -706,6 +978,40 @@ class _HomePageState extends State<HomePage> {
 
     final username = _accountController.text.trim();
     final password = _passwordController.text;
+    WindowsNetworkAdapter? adapter;
+
+    if (_showWindowsAdapterSelector) {
+      final adapters = await _refreshWindowsAdapters(
+        clearMissingSelection: false,
+      );
+      if (!mounted) {
+        return;
+      }
+      try {
+        adapter = _adapterForLogin(adapters);
+      } on FormatException catch (error) {
+        final message = error.message.toString();
+        _replaceLogs(<String>['[ERROR] $message']);
+        setState(() {
+          _connectionState = _ConnectionViewState.failed;
+          _session = null;
+          _statusMessage = message;
+        });
+        return;
+      }
+
+      if (adapter?.kind == WindowsNetworkAdapterKind.ethernet &&
+          _selectedProfile != DeviceProfile.windows) {
+        const message = '有线网络只能使用 Windows 终端认证';
+        _replaceLogs(const <String>['[ERROR] $message']);
+        setState(() {
+          _connectionState = _ConnectionViewState.failed;
+          _session = null;
+          _statusMessage = message;
+        });
+        return;
+      }
+    }
 
     try {
       await widget.onSettingsChanged(
@@ -713,6 +1019,7 @@ class _HomePageState extends State<HomePage> {
           savedAccount: username,
           savedPassword: password,
           savedProfile: _selectedProfile,
+          windowsAdapterId: _selectedAdapterId,
         ),
       );
     } on Object catch (error) {
@@ -737,6 +1044,9 @@ class _HomePageState extends State<HomePage> {
       _session = null;
       _statusMessage = '正在连接 ${widget.settings.baseUrl}';
     });
+    if (adapter != null) {
+      _appendLog('[INFO] 使用网络适配器: ${adapter.name}，IPv4=${adapter.ipv4}');
+    }
 
     unawaited(_showProgressDialog());
     await Future<void>.delayed(Duration.zero);
@@ -748,6 +1058,7 @@ class _HomePageState extends State<HomePage> {
         appUuid: widget.settings.appUuid,
         username: username,
         password: password,
+        networkIdentity: adapter?.identity,
         onLog: _appendLog,
         onBindConflict: _showBindDialog,
       );
